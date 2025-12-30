@@ -3,8 +3,12 @@ import httpx
 from fastapi import FastAPI, Request
 from strawberry.fastapi import GraphQLRouter
 from app.schemas import schema 
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(title="API Gateway")
+
+# Expose /metrics compatible with Prometheus scraping
+Instrumentator().instrument(app).expose(app)
 
 # 1. Initialize a global HTTP client for performance (reuses connections)
 @app.on_event("startup")
@@ -23,6 +27,10 @@ async def get_context(request: Request):
         "ORDER_SERVICE_URL": os.getenv("ORDER_SERVICE_URL", "http://order-service:8000"),
         "PAYMENT_SERVICE_URL": os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
     }
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "api-gateway"}
 
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
 app.include_router(graphql_app, prefix="/graphql")
