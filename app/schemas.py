@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 import httpx
 from app.config import settings
+from math import cos, radians
 
 # --- Types ---
 
@@ -49,6 +50,35 @@ class PaymentType:
     created_at: datetime
     updated_at: datetime
 
+@strawberry.type
+class PartnerType:
+    id: str
+    name: str
+    address: Optional[str]
+    city: Optional[str]
+    active: bool
+    tenant_id: Optional[str]
+    latitude: float
+    longitude: float
+
+@strawberry.input
+class CreatePartnerInput:
+    name: str
+    active: bool
+    latitude: float
+    longitude: float
+    address: str
+
+@strawberry.input
+class PartnerUpdateInput:
+    name: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    active: Optional[bool] = None
+    tenant_id: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
 # --- Helper Function for Data Mapping ---
 
 def map_payment_data(p: dict) -> PaymentType:
@@ -73,6 +103,18 @@ def map_order_data(o: dict) -> OrderType:
         o["items"] = [OrderItemType(**item) for item in o["items"]]
         
     return OrderType(**o)
+
+def map_partner_data(data: dict) -> PartnerType:
+    return PartnerType(
+        id=data["id"],
+        name=data["name"],
+        address=data.get("address"),
+        city=data.get("city", None),
+        active=data.get("active", True),
+        tenant_id=data.get("tenant_id", None),
+        latitude=data["latitude"],
+        longitude=data["longitude"]
+    )
 
 # --- Resolvers ---
 
@@ -120,6 +162,112 @@ class Query:
                 return [map_payment_data(p) for p in response.json()]
             except Exception as e:
                 raise Exception(f"Payment service error: {str(e)}")
+    
+
+    @strawberry.field
+    async def all_partners(self, info) -> List[PartnerType]:
+        print("here")
+        # 1. Pridobimo request iz contexta, da lahko preberemo headerje
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        print("after tenant")
+        # 2. Uporabimo httpx za klic na Partner mikrostoritev
+        async with httpx.AsyncClient() as client:
+            print(f"{settings.PARTNER_SERVICE_URL}/partners")
+            try:
+                response = await client.get(
+                    f"{settings.PARTNER_SERVICE_URL}/partners", # URL tvoje mikrostoritve
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                if response.status_code != 200:
+                    return []
+                
+                # 3. Pretvorimo JSON odgovor v seznam PartnerType objektov
+                # map_partner_data je tvoja funkcija, ki preslika JSON v GraphQL tip
+                return [map_partner_data(p) for p in response.json()]
+                
+            except Exception as e:
+                # 4. Centralizirano javljanje napak
+                raise Exception(f"Partner service communication error: {str(e)}")
+
+    @strawberry.field
+    async def partner_by_id(self, info, partner_id: str) -> Optional[PartnerType]:
+        # 1. Priprava requesta in tenant ID-ja
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        # 2. HTTP klic na Partner mikrostoritev
+        async with httpx.AsyncClient() as client:
+            try:
+                # URL vsebuje ID partnerja
+                url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+
+                print(response.status_code, response.text)
+                
+                # Če partnerja ni (404), vrnemo None
+                if response.status_code == 404:
+                    return None
+            
+                    
+                if response.status_code != 200:
+                    raise Exception(f"Partner service returned {response.status_code}")
+                
+                # 3. Mapiranje rezultata
+                partner_json = response.json()
+                return map_partner_data(partner_json)
+                
+            except Exception as e:
+                raise Exception(f"Error fetching partner {partner_id}: {str(e)}")
+
+    @strawberry.field
+    async def nearby_partners(self, info, lat: float, lng: float, radius_km: float = 5.0) -> List[PartnerType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        # 2. HTTP klic na Partner mikrostoritev
+        async with httpx.AsyncClient() as client:
+            try:
+                # URL vsebuje ID partnerja
+                url = f"{settings.PARTNER_SERVICE_URL}/partners/nearby"
+
+                params = {
+                    "lat": lat,
+                    "lng": lng,
+                    "radius_km": radius_km
+                }
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True,
+                    params=params
+                )
+                
+                # Če partnerja ni (404), vrnemo None
+                if response.status_code == 404:
+                    return None
+            
+                    
+                if response.status_code != 200:
+                    raise Exception(f"Partner service returned {response.status_code}")
+                
+                # 3. Mapiranje rezultata
+                partner_json = response.json()
+                return [map_partner_data(p) for p in partner_json]
+                
+            except Exception as e:
+                raise Exception(f"Error fetching nearby partners at ({lat, lng}): {str(e)}")
 
 @strawberry.type
 class Mutation:
@@ -143,6 +291,71 @@ class Mutation:
                 raise Exception(f"Order creation failed: {response.text}")
             
             return map_order_data(response.json())
+    @strawberry.field
+    async def create_partner(self, info, input: CreatePartnerInput) -> PartnerType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "name": input.name,
+                "active": input.active,
+                "address": input.address,
+                "latitude": input.latitude,
+                "longitude": input.longitude
+            }
+            
+            response = await client.post(
+                f"{settings.PARTNER_SERVICE_URL}/partners",
+                json=payload,
+                headers={"X-Tenant-ID": tenant_id},
+                follow_redirects=True
+            )
+            if response.status_code not in [200, 201]:
+                raise Exception(f"Partner creation failed: {response.text}")
+            
+            return map_partner_data(response.json())
+
+    @strawberry.mutation
+    async def update_partner(self, info, partner_id: str, input: PartnerUpdateInput) -> PartnerType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        update_data = strawberry.asdict(input)
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+
+        async with httpx.AsyncClient() as client:
+            url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+            
+            # 3. Make the remote call
+            response = await client.put(
+                url, 
+                json=update_data, 
+                headers={"X-Tenant-ID": tenant_id}
+            )
+            
+            # 4. Handle Errors
+            if response.status_code == 404:
+                raise Exception(f"Partner {partner_id} not found in remote service.")
+            elif response.status_code != 200:
+                raise Exception(f"Failed to update partner: {response.text}")
+
+            # 5. Return the updated object
+            return PartnerType(**response.json())
+
+    @strawberry.mutation
+    async def delete_partner(self, info, partner_id: str) -> bool:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+            response = await client.delete(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
+            
+            if response.status_code != 204:
+                raise Exception(f"Partner not successfully deleted: {response.text}")
+            
+            return True
 
     @strawberry.field
     async def confirm_payment(self, info, payment_id: int) -> PaymentType:

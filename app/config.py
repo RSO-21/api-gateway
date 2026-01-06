@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # REST API endpoints
     ORDER_SERVICE_URL: str = os.getenv("ORDER_SERVICE_URL", "http://order-service:8000")
     PAYMENT_SERVICE_URL: str = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
+    PARTNER_SERVICE_URL: str = os.getenv("PARTNER_SERVICE_URL", "http://partner-service:8000")
     
     # gRPC endpoints (if needed in future)
     PAYMENT_SERVICE_HOST: str = "payment-grpc"
