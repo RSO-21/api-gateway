@@ -4,8 +4,18 @@ from fastapi import FastAPI, Request
 from strawberry.fastapi import GraphQLRouter
 from app.schemas import schema 
 from prometheus_fastapi_instrumentator import Instrumentator
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="API Gateway")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4200",  # Angular dev
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Expose /metrics compatible with Prometheus scraping
 Instrumentator().instrument(app).expose(app)
