@@ -5,6 +5,7 @@ from decimal import Decimal
 import httpx
 from app.config import settings
 from math import cos, radians
+from strawberry.scalars import JSON
 
 # --- Types ---
 
@@ -120,6 +121,16 @@ class OfferUpdateInput:
     pickup_until: Optional[datetime] = None
     tenant_id: Optional[str] = None
 
+@strawberry.type
+class NotificationType:
+    id: int
+    user_id: str
+    type: str = "INFO"
+    title: str
+    message: str
+    meta: Optional[JSON] = None
+    is_read: bool = False
+
 # --- Helper Function for Data Mapping ---
 
 def map_payment_data(p: dict) -> PaymentType:
@@ -155,6 +166,17 @@ def map_partner_data(data: dict) -> PartnerType:
         tenant_id=data.get("tenant_id", None),
         latitude=data["latitude"],
         longitude=data["longitude"]
+    )
+
+def map_notification_data(data: dict) -> NotificationType:
+    return NotificationType(
+        id=data["id"],
+        user_id=data["user_id"],
+        type=data.get("type", "INFO"),
+        title=data["title"],
+        message=data["message"],
+        meta=data.get("meta"),
+        is_read=data.get("is_read", False)
     )
 
 def map_offer_data(data: dict) -> OfferType:
@@ -385,6 +407,35 @@ class Query:
                 
             except Exception as e:
                 raise Exception(f"Error fetching offer {offer_id}: {str(e)}")
+    
+    @strawberry.field
+    async def all_notifications(self, info, user_id: str, unread_only: bool = False) -> List[NotificationType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{settings.NOTIFICATION_SERVICE_URL}/notifications", # URL tvoje mikrostoritve
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True,
+                    params={
+                        "user_id": user_id, 
+                        "unread_only": unread_only
+                    }
+                )
+                
+                if response.status_code != 200:
+                    return []
+                
+                # 3. Pretvorimo JSON odgovor v seznam PartnerType objektov
+                # map_partner_data je tvoja funkcija, ki preslika JSON v GraphQL tip
+                return [map_notification_data(p) for p in response.json()]
+                
+            except Exception as e:
+                # 4. Centralizirano javljanje napak
+                raise Exception(f"Partner service communication error: {str(e)}")
 
 @strawberry.type
 class Mutation:
@@ -561,5 +612,20 @@ class Mutation:
                 raise Exception(f"Payment confirmation failed: {response.text}")
             
             return map_payment_data(response.json())
+    
+    @strawberry.field
+    async def mark_read(self, info, notification_id: int) -> NotificationType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            url = f"{settings.NOTIFICATION_SERVICE_URL}/notifications/{notification_id}/read"
+            response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
+            
+            if response.status_code != 200:
+                print(response.status_code, response.text)
+                raise Exception(f"Payment confirmation failed: {response.text}")
+            
+            return map_notification_data(response.json())
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
