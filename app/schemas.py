@@ -158,6 +158,52 @@ class UserUpdateInput:
     latitude: Optional[float] = None
     partner_id: Optional[str] = None
 
+
+@strawberry.type
+class LoginSuccessResponse:
+    status: str = "ok"
+    username: Optional[str] = None
+
+@strawberry.input
+class LoginRequest:
+    username: str
+    password: str
+
+@strawberry.type
+class TokenResponse:
+    access_token: str
+    refresh_token: Optional[str]
+    id_token: Optional[str]
+    token_type: str
+    expires_in: int
+    scope: Optional[str]
+
+@strawberry.input
+class SignupInput:
+    username: str
+    email: str
+    password: str
+
+@strawberry.type
+class SignupResponse:
+    status: str
+    message: Optional[str] = None
+
+@strawberry.type
+class LogoutResponse:
+    status: str
+
+@strawberry.type
+class UserMe:
+    sub: str
+    email: Optional[str] = None
+    preferred_username: Optional[str] = None
+    roles: List[str] = strawberry.field(default_factory=list)
+
+@strawberry.type
+class CheckResponse:
+    message: str
+
 # --- Helper Function for Data Mapping ---
 
 def map_payment_data(p: dict) -> PaymentType:
@@ -569,6 +615,56 @@ class Query:
                 
             except Exception as e:
                 raise Exception(f"Error fetching orders for user {user_id}: {str(e)}")
+    
+    @strawberry.field
+    async def me(self, info: strawberry.Info) -> Optional[UserMe]:
+        request = info.context["request"]
+        http_client = info.context["http_client"]
+
+        # 1. Grab cookies from the incoming browser request
+        cookies = request.cookies
+
+        # 2. Forward them to the Auth MS /me endpoint
+        auth_resp = await http_client.get(
+            f"{settings.AUTH_SERVICE_URL}/auth/me",
+            cookies=cookies
+        )
+
+        if auth_resp.status_code != 200:
+            return None
+
+        data = auth_resp.json()
+        return UserMe(**data)
+
+    # @strawberry.field
+    # async def check_auth(self, info: strawberry.Info) -> CheckResponse:
+    #     request = info.context["request"]
+    #     http_client = info.context["http_client"]
+
+    #     # 1. Grab the Authorization header
+    #     auth_header = request.headers.get("Authorization")
+        
+    #     # If this is None, the client (browser/Postman) didn't send the header
+    #     if not auth_header:
+    #         print("DEBUG: No Authorization header found in the incoming request")
+    #         raise Exception("No Authorization header provided by client")
+
+    #     headers = {"Authorization": auth_header}
+
+    #     # 2. Forward to the /check endpoint
+    #     auth_resp = await http_client.get(
+    #         f"{settings.AUTH_SERVICE_URL}/auth/check",
+    #         headers=headers
+    #     )
+
+    #     # 3. Handle the response
+    #     if auth_resp.status_code != 200:
+    #         # Instead of a generic "Unauthorized", we show what the Auth MS actually said
+    #         ms_error = auth_resp.json().get("error", "Unauthorized")
+    #         print(f"DEBUG: Auth MS rejected the request with: {ms_error}")
+    #         raise Exception(f"Auth Service Error: {ms_error}")
+
+    #     return CheckResponse(message=auth_resp.json()["message"])
 
 @strawberry.type
 class Mutation:
@@ -787,5 +883,75 @@ class Mutation:
 
             # 5. Return the updated object
             return map_user_data(response.json())
+    
+    @strawberry.mutation
+    async def login(self, info, input: LoginRequest) -> LoginSuccessResponse:
+        response = info.context["response"]
+        http_client = info.context["http_client"] # From your context earlier
+
+        # 1. Forward the credentials to the Auth MS
+        # No Keycloak logic here!
+        auth_response = await http_client.post(
+            f"{settings.AUTH_SERVICE_URL}/auth/login",
+            json={"username": input.username, "password": input.password}
+        )
+
+
+        if auth_response.status_code != 200:
+            raise Exception("Authentication failed")
+
+        auth_cookies = auth_response.headers.get_list("set-cookie")
+        for cookie_string in auth_cookies:
+            response.headers.append("set-cookie", cookie_string)
+
+        return LoginSuccessResponse(status="ok")
+    
+    @strawberry.mutation
+    async def signup(self, info: strawberry.Info, input: SignupInput) -> SignupResponse:
+        response = info.context["response"]
+        http_client = info.context["http_client"]
+
+        # 1. Forward signup to Flask Auth Microservice
+        try:
+            auth_resp = await http_client.post(
+                f"{settings.AUTH_SERVICE_URL}/auth/signup",
+                json={
+                    "username": input.username,
+                    "email": input.email,
+                    "password": input.password
+                }
+            )
+
+            # 2. Check for errors from the Microservice
+            if auth_resp.status_code != 200:
+                error_data = auth_resp.json()
+                raise Exception(error_data.get("error", "Signup failed"))
+
+            # 3. RELAY COOKIES: The "Messenger" part
+            # Grab all 'Set-Cookie' headers from Flask and give them to the Browser
+            auth_cookies = auth_resp.headers.get_list("set-cookie")
+            for cookie_string in auth_cookies:
+                response.headers.append("set-cookie", cookie_string)
+
+            return SignupResponse(status="ok")
+
+        except Exception as e:
+            # This will show up in the 'errors' array in the GraphQL response
+            raise Exception(f"Signup error: {str(e)}")
+
+
+    @strawberry.mutation
+    async def logout(self, info: strawberry.Info) -> LogoutResponse:
+        response = info.context["response"]
+        http_client = info.context["http_client"]
+
+        # 1. Call the Auth Microservice logout endpoint
+        auth_resp = await http_client.post(f"{settings.AUTH_SERVICE_URL}/auth/logout")
+
+        auth_cookies = auth_resp.headers.get_list("set-cookie")
+        for cookie_string in auth_cookies:
+            response.headers.append("set-cookie", cookie_string)
+
+        return LogoutResponse(status="logged_out")
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)

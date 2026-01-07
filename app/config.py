@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     OFFER_SERVICE_URL: str = os.getenv("OFFER_SERVICE_URL", "http://offer-service:8000")
     NOTIFICATION_SERVICE_URL: str = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification-service:8000")
     USER_SERVICE_URL: str = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
+    AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
     
     # gRPC endpoints (if needed in future)
     PAYMENT_SERVICE_HOST: str = "payment-grpc"
