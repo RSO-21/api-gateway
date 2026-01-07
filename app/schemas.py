@@ -24,7 +24,10 @@ class OrderType:
     payment_status: str
     payment_id: Optional[int]
     created_at: datetime
+    updated_at: datetime
     items: List[OrderItemType]
+    partner_id: Optional[str] = None
+    payment_id: Optional[int] = None
 
 @strawberry.input
 class OrderItemInput:
@@ -131,6 +134,30 @@ class NotificationType:
     meta: Optional[JSON] = None
     is_read: bool = False
 
+@strawberry.type
+class UserType:
+    id: str
+    username: str
+    email: str
+    name: Optional[str]
+    surname: Optional[str]
+    address: Optional[str]
+    longitude: Optional[float]
+    latitude: Optional[float]
+    created_at: datetime
+    updated_at: datetime
+    partner_id: Optional[str]
+
+@strawberry.input
+class UserUpdateInput:
+    email: Optional[str] = None
+    name: Optional[str] = None
+    surname: Optional[str] = None
+    address: Optional[str] = None
+    longitude: Optional[float] = None
+    latitude: Optional[float] = None
+    partner_id: Optional[str] = None
+
 # --- Helper Function for Data Mapping ---
 
 def map_payment_data(p: dict) -> PaymentType:
@@ -177,6 +204,26 @@ def map_notification_data(data: dict) -> NotificationType:
         message=data["message"],
         meta=data.get("meta"),
         is_read=data.get("is_read", False)
+    )
+
+def map_user_data(data: dict) -> UserType:
+    if isinstance(data.get("created_at"), str):
+        data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    if isinstance(data.get("updated_at"), str):
+        data["updated_at"] = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+    
+    return UserType(
+        id=data["id"],
+        username=data["username"],
+        email=data["email"],
+        name=data.get("name"),
+        surname=data.get("surname"),
+        address=data.get("address"),
+        longitude=data.get("longitude"),
+        latitude=data.get("latitude"),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+        partner_id=data.get("partner_id")
     )
 
 def map_offer_data(data: dict) -> OfferType:
@@ -437,6 +484,92 @@ class Query:
                 # 4. Centralizirano javljanje napak
                 raise Exception(f"Partner service communication error: {str(e)}")
 
+    @strawberry.field
+    async def all_users(self, info) -> List[UserType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{settings.USER_SERVICE_URL}/users", # URL tvoje mikrostoritve
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                if response.status_code != 200:
+                    return []
+                
+                # 3. Pretvorimo JSON odgovor v seznam PartnerType objektov
+                # map_partner_data je tvoja funkcija, ki preslika JSON v GraphQL tip
+                return [map_user_data(p) for p in response.json()]
+                
+            except Exception as e:
+                # 4. Centralizirano javljanje napak
+                raise Exception(f"Partner service communication error: {str(e)}")
+
+    @strawberry.field
+    async def user_by_id(self, info, user_id: str) -> Optional[UserType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # URL vsebuje ID partnerja
+                url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                # Če partnerja ni (404), vrnemo None
+                if response.status_code == 404:
+                    return None
+            
+                    
+                if response.status_code != 200:
+                    raise Exception(f"User service returned {response.status_code}")
+                
+                # 3. Mapiranje rezultata
+                user_json = response.json()
+                return map_user_data(user_json)
+                
+            except Exception as e:
+                raise Exception(f"Error fetching offer {user_id}: {str(e)}")
+    
+    @strawberry.field
+    async def user_order_history(self, info, user_id: str) -> List[OrderType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                url = f"{settings.USER_SERVICE_URL}/users/{user_id}/orders"
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                if response.status_code == 404:
+                    return []
+                    
+                if response.status_code != 200:
+                    raise Exception(f"User service returned {response.status_code}")
+                
+                orders_data = response.json()['orders']
+
+                return [map_order_data(o) for o in orders_data]
+                
+            except Exception as e:
+                raise Exception(f"Error fetching orders for user {user_id}: {str(e)}")
+
 @strawberry.type
 class Mutation:
     @strawberry.field
@@ -627,5 +760,32 @@ class Mutation:
                 raise Exception(f"Payment confirmation failed: {response.text}")
             
             return map_notification_data(response.json())
+    
+    @strawberry.mutation
+    async def update_user(self, info, user_id: str, input: UserUpdateInput) -> UserType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        update_data = strawberry.asdict(input)
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+
+        async with httpx.AsyncClient() as client:
+            url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
+            
+            # 3. Make the remote call
+            response = await client.patch(
+                url, 
+                json=update_data, 
+                headers={"X-Tenant-ID": tenant_id}
+            )
+            
+            # 4. Handle Errors
+            if response.status_code == 404:
+                raise Exception(f"User {user_id} not found in remote service.")
+            elif response.status_code != 200:
+                raise Exception(f"Failed to update user: {response.text}")
+
+            # 5. Return the updated object
+            return map_user_data(response.json())
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
