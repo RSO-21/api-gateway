@@ -39,6 +39,7 @@ class CreateOrderInput:
     user_id: str
     items: List[OrderItemInput]
     amount: Decimal
+    partner_id: str
 
 @strawberry.type
 class PaymentType:
@@ -91,10 +92,7 @@ class OfferType:
     description: Optional[str]
     price_original: float
     price_discounted: float
-    quantity_total: int
-    quantity_available: int
-    pickup_from: datetime
-    pickup_until: datetime
+    expiry_date: datetime
     status: str = "ACTIVE"
     tenant_id: Optional[str]
 
@@ -105,10 +103,7 @@ class CreateOfferInput:
     description: Optional[str]
     price_original: float
     price_discounted: float
-    quantity_total: int
-    quantity_available: int
-    pickup_from: datetime
-    pickup_until: datetime
+    expiry_date: datetime
     tenant_id: Optional[str]
 
 @strawberry.input
@@ -118,10 +113,7 @@ class OfferUpdateInput:
     description: Optional[str] = None
     price_original: Optional[float] = None
     price_discounted: Optional[float] = None
-    quantity_total: Optional[int] = None
-    quantity_available: Optional[int] = None
-    pickup_from: Optional[datetime] = None
-    pickup_until: Optional[datetime] = None
+    expiry_date: datetime
     tenant_id: Optional[str] = None
 
 @strawberry.type
@@ -204,7 +196,47 @@ class UserMe:
 class CheckResponse:
     message: str
 
-# --- Helper Function for Data Mapping ---
+@strawberry.type
+class ReviewType:
+    id: str
+    order_id: int
+    user_id: str
+    partner_id: str
+    rating: int
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+@strawberry.type
+class ReviewCreateType:
+    order_id: int
+    user_id: str
+    rating: int
+    comment: Optional[str] = None
+
+@strawberry.type
+class ReviewOutType:
+    id: str
+    order_id: int
+    user_id: str
+    partner_id: str
+    rating: int
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+@strawberry.type
+class PartnerRatingOutType:
+    partner_id: str
+    avg_rating: float
+    count: int
+
+@strawberry.input
+class RatingInput:
+    order_id: int
+    user_id: str
+    rating: int
+    comment: Optional[str] = None
 
 def map_payment_data(p: dict) -> PaymentType:
     """Safely converts JSON dictionary to PaymentType with correct types."""
@@ -252,6 +284,23 @@ def map_notification_data(data: dict) -> NotificationType:
         is_read=data.get("is_read", False)
     )
 
+def map_review_data(data: dict) -> ReviewType:
+    if isinstance(data.get("created_at"), str):
+        data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    if isinstance(data.get("updated_at"), str):
+        data["updated_at"] = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+    
+    return ReviewOutType(
+        id=data["id"],
+        order_id=data["order_id"],
+        user_id=data["user_id"],
+        partner_id=data["partner_id"],
+        rating=data["rating"],
+        comment=data.get("comment"),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"]
+    )
+
 def map_user_data(data: dict) -> UserType:
     if isinstance(data.get("created_at"), str):
         data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
@@ -273,10 +322,8 @@ def map_user_data(data: dict) -> UserType:
     )
 
 def map_offer_data(data: dict) -> OfferType:
-    if not isinstance(data.get("pickup_from"), str):
-        data["pickup_from"] = datetime.fromisoformat(data["pickup_from"].replace("Z", "+00:00"))
-    if not isinstance(data.get("pickup_until"), str):
-        data["pickup_until"] = datetime.fromisoformat(data["pickup_until"].replace("Z", "+00:00"))
+    if not isinstance(data.get("expiry_date"), str):
+        data["expiry_date"] = datetime.fromisoformat(data["expiry_date"].replace("Z", "+00:00"))
     
     return OfferType(
         id=data["id"],
@@ -285,10 +332,7 @@ def map_offer_data(data: dict) -> OfferType:
         description=data.get("description"),
         price_original=data["price_original"],
         price_discounted=data["price_discounted"],
-        quantity_total=data["quantity_total"],
-        quantity_available=data["quantity_available"],
-        pickup_from=data["pickup_from"],
-        pickup_until=data["pickup_until"],
+        expiry_date=data["expiry_date"],
         status=data.get("status", "ACTIVE"),
         tenant_id=data.get("tenant_id")
     )
@@ -332,7 +376,6 @@ class Query:
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
                 )
-                print(response.status_code, response.text)
                 if response.status_code != 200:
                     return []
                 
@@ -343,14 +386,10 @@ class Query:
 
     @strawberry.field
     async def all_partners(self, info) -> List[PartnerType]:
-        print("here")
-        # 1. Pridobimo request iz contexta, da lahko preberemo headerje
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
-        print("after tenant")
         # 2. Uporabimo httpx za klic na Partner mikrostoritev
         async with httpx.AsyncClient() as client:
-            print(f"{settings.PARTNER_SERVICE_URL}/partners")
             try:
                 response = await client.get(
                     f"{settings.PARTNER_SERVICE_URL}/partners", # URL tvoje mikrostoritve
@@ -388,8 +427,6 @@ class Query:
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
                 )
-
-                print(response.status_code, response.text)
                 
                 # Če partnerja ni (404), vrnemo None
                 if response.status_code == 404:
@@ -459,7 +496,6 @@ class Query:
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
                 )
-                print(response.status_code, response.text)
                 if response.status_code != 200:
                     return []
                 
@@ -588,6 +624,73 @@ class Query:
                 raise Exception(f"Error fetching offer {user_id}: {str(e)}")
     
     @strawberry.field
+    async def list_partner_reviews(self, info, partner_id: str) -> List[ReviewOutType]:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # URL vsebuje ID partnerja
+                url = f"{settings.REVIEW_SERVICE_URL}/reviews/partners/{partner_id}/reviews"
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                # Če partnerja ni (404), vrnemo None
+                if response.status_code == 404:
+                    return None
+            
+                    
+                if response.status_code != 200:
+                    return []
+                
+                # 3. Mapiranje rezultata
+                review_json = response.json()
+
+                return [map_review_data(r) for r in review_json]
+                
+            except Exception as e:
+                raise Exception(f"Error fetching review {partner_id}: {str(e)}")
+    
+    @strawberry.field
+    async def get_partner_rating(self, info, partner_id: str) -> PartnerRatingOutType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # URL vsebuje ID partnerja
+                url = f"{settings.REVIEW_SERVICE_URL}/reviews/partners/{partner_id}/rating"
+                
+                response = await client.get(
+                    url, 
+                    headers={"X-Tenant-ID": tenant_id},
+                    timeout=settings.REQUEST_TIMEOUT,
+                    follow_redirects=True
+                )
+                
+                # Če partnerja ni (404), vrnemo None
+                if response.status_code == 404:
+                    return None
+            
+                    
+                if response.status_code != 200:
+                    return []
+                
+                # 3. Mapiranje rezultata
+                review_json = response.json()
+
+                return PartnerRatingOutType(**review_json)
+                
+            except Exception as e:
+                raise Exception(f"Error fetching review {partner_id}: {str(e)}")
+            
+
+    @strawberry.field
     async def user_order_history(self, info, user_id: str) -> List[OrderType]:
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
@@ -679,7 +782,8 @@ class Mutation:
                 json={
                     "user_id": input.user_id,
                     "items": [{"offer_id": i.offer_id, "quantity": i.quantity} for i in input.items],
-                    "amount": str(input.amount)
+                    "amount": str(input.amount),
+                    "partner_id": input.partner_id
                 },
                 headers={"X-Tenant-ID": tenant_id},
                 follow_redirects=True
@@ -765,10 +869,7 @@ class Mutation:
                 "title": input.title,
                 "price_original": input.price_original,
                 "price_discounted": input.price_discounted,
-                "quantity_total": input.quantity_total,
-                "quantity_available": input.quantity_available,
-                "pickup_from": input.pickup_from.isoformat(),
-                "pickup_until": input.pickup_until.isoformat()
+                "expiry_date": input.expiry_date.isoformat()
             }
 
             if input.description is not None:
@@ -852,7 +953,6 @@ class Mutation:
             response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
             
             if response.status_code != 200:
-                print(response.status_code, response.text)
                 raise Exception(f"Payment confirmation failed: {response.text}")
             
             return map_notification_data(response.json())
@@ -953,5 +1053,32 @@ class Mutation:
             response.headers.append("set-cookie", cookie_string)
 
         return LogoutResponse(status="logged_out")
+    
+    @strawberry.field
+    async def create_review(self, info, input: RatingInput) -> ReviewOutType:
+        request = info.context["request"]
+        tenant_id = request.headers.get("X-Tenant-ID", "public")
+        
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "order_id": input.order_id,
+                "user_id": input.user_id,
+                "rating": input.rating
+            }
+
+            if input.comment is not None:
+                payload["comment"] = input.comment
+            
+            response = await client.post(
+                f"{settings.REVIEW_SERVICE_URL}/reviews",
+                json=payload,
+                headers={"X-Tenant-ID": tenant_id},
+                follow_redirects=True
+            )
+            if response.status_code not in [200, 201]:
+                raise Exception(f"Partner creation failed: {response.text}")
+            
+            return ReviewOutType(**response.json())
+
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
