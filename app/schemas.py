@@ -73,6 +73,7 @@ class CreatePartnerInput:
     latitude: float
     longitude: float
     address: str
+    tenant_id: Optional[str] = None
 
 @strawberry.input
 class PartnerUpdateInput:
@@ -104,7 +105,7 @@ class CreateOfferInput:
     price_original: float
     price_discounted: float
     expiry_date: datetime
-    tenant_id: Optional[str]
+    tenant_id: Optional[str] = None
 
 @strawberry.input
 class OfferUpdateInput:
@@ -238,6 +239,17 @@ class RatingInput:
     rating: int
     comment: Optional[str] = None
 
+@strawberry.type
+class OrderSummaryOut:
+    external_id: str
+    order_id: int
+    tenant_id: str
+    partner_id: str
+    user_id: str
+    order_status: str
+    total_amount: float
+    created_at: datetime
+
 def map_payment_data(p: dict) -> PaymentType:
     """Safely converts JSON dictionary to PaymentType with correct types."""
     if isinstance(p.get("created_at"), str):
@@ -260,6 +272,13 @@ def map_order_data(o: dict) -> OrderType:
         o["items"] = [OrderItemType(**item) for item in o["items"]]
         
     return OrderType(**o)
+
+def map_order_summary_data(o: dict) -> OrderSummaryOut:
+    """Safely converts JSON dictionary to OrderSummaryOut."""
+    if isinstance(o.get("created_at"), str):
+        o["created_at"] = datetime.fromisoformat(o["created_at"].replace("Z", "+00:00"))
+    
+    return OrderSummaryOut(**o)
 
 def map_partner_data(data: dict) -> PartnerType:
     return PartnerType(
@@ -691,7 +710,7 @@ class Query:
             
 
     @strawberry.field
-    async def user_order_history(self, info, user_id: str) -> List[OrderType]:
+    async def user_order_history(self, info, user_id: str) -> List[OrderSummaryOut]:
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
@@ -705,6 +724,8 @@ class Query:
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
                 )
+
+                print("debug response:", response.status_code, response.text)
                 
                 if response.status_code == 404:
                     return []
@@ -712,9 +733,9 @@ class Query:
                 if response.status_code != 200:
                     raise Exception(f"User service returned {response.status_code}")
                 
-                orders_data = response.json()['orders']
+                orders_data = response.json()["orders"]
 
-                return [map_order_data(o) for o in orders_data]
+                return [map_order_summary_data(o) for o in orders_data]
                 
             except Exception as e:
                 raise Exception(f"Error fetching orders for user {user_id}: {str(e)}")
@@ -773,10 +794,17 @@ class Query:
 class Mutation:
     @strawberry.field
     async def create_order(self, info, input: CreateOrderInput) -> OrderType:
+        first_offer_id = input.items[0].offer_id
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
         async with httpx.AsyncClient() as client:
+            partner_res_tenant = await client.get(
+                f"{settings.PARTNER_SERVICE_URL}/partners/{input.partner_id}"
+            )
+
+            real_tenant = partner_res_tenant.json().get("tenant_id", "public")
+
             response = await client.post(
                 f"{settings.ORDER_SERVICE_URL}/orders",
                 json={
@@ -785,7 +813,7 @@ class Mutation:
                     "amount": str(input.amount),
                     "partner_id": input.partner_id
                 },
-                headers={"X-Tenant-ID": tenant_id},
+                headers={"X-Tenant-ID": real_tenant},
                 follow_redirects=True
             )
             if response.status_code not in [200, 201]:
@@ -803,7 +831,8 @@ class Mutation:
                 "active": input.active,
                 "address": input.address,
                 "latitude": input.latitude,
-                "longitude": input.longitude
+                "longitude": input.longitude,
+                "tenant_id": input.tenant_id
             }
             
             response = await client.post(
@@ -874,8 +903,6 @@ class Mutation:
 
             if input.description is not None:
                 payload["description"] = input.description
-            if input.tenant_id is not None:
-                payload["tenant_id"] = input.tenant_id
             
             response = await client.post(
                 f"{settings.OFFER_SERVICE_URL}/offers",
@@ -930,13 +957,14 @@ class Mutation:
             return True
 
     @strawberry.field
-    async def confirm_payment(self, info, payment_id: int) -> PaymentType:
+    async def confirm_payment(self, info, payment_id: int, external_id: str) -> PaymentType:
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
         async with httpx.AsyncClient() as client:
+            params = {"external_id": external_id}
             url = f"{settings.PAYMENT_SERVICE_URL}/payments/{payment_id}/confirm"
-            response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
+            response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, params=params, follow_redirects=True)
             
             if response.status_code != 200:
                 raise Exception(f"Payment confirmation failed: {response.text}")
