@@ -6,7 +6,24 @@ from app.schemas import schema
 from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.services.users import router as users_router
+from app.services.partners import router as partners_router
+from app.services.offer import router as offer_router
+from app.services.auth import router as auth_router
+from app.services.order import router as order_router
+from app.services.payment import router as payment_router
+from app.services.notification import router as notification_router
+from app.services.review import router as review_router
+from app.schemas import schema  # tvoj Strawberry schema
+
+# -----------------------
+# FastAPI app
+# -----------------------
 app = FastAPI(title="API Gateway")
+
+# -----------------------
+# Middleware
+# -----------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -17,7 +34,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Expose /metrics compatible with Prometheus scraping
+app.include_router(users_router)
+app.include_router(partners_router)
+app.include_router(offer_router)
+app.include_router(auth_router)
+app.include_router(order_router)
+app.include_router(payment_router)
+app.include_router(notification_router)
+app.include_router(review_router)
+
 Instrumentator().instrument(app).expose(app)
 
 # 1. Initialize a global HTTP client for performance (reuses connections)
@@ -33,19 +58,16 @@ async def shutdown_event():
 async def get_context(request: Request, response: Response):
     return {
         "request": request,
-        "response": response, # Add this line
+        "response": response,
         "http_client": request.app.state.http_client,
     }
 
-# When creating the schema view
-schema_view = GraphQLRouter(schema, context_getter=get_context)
+graphql_app = GraphQLRouter(schema, context_getter=get_context)
+app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "api-gateway"}
-
-graphql_app = GraphQLRouter(schema, context_getter=get_context)
-app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/")
 def read_root():
