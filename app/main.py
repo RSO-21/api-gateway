@@ -33,18 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(users_router)
-app.include_router(partners_router)
-app.include_router(offer_router)
-app.include_router(auth_router)
-app.include_router(order_router)
-app.include_router(payment_router)
-app.include_router(notification_router)
-app.include_router(review_router)
-
-Instrumentator().instrument(app).expose(app)
-
 # 1. Initialize a global HTTP client for performance (reuses connections)
 @app.on_event("startup")
 async def startup_event():
@@ -64,6 +52,17 @@ async def get_context(request: Request, response: Response):
 
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
 app.include_router(graphql_app, prefix="/graphql")
+
+app.include_router(users_router)
+app.include_router(partners_router)
+app.include_router(offer_router)
+app.include_router(auth_router)
+app.include_router(order_router)
+app.include_router(payment_router)
+app.include_router(notification_router)
+app.include_router(review_router)
+
+Instrumentator().instrument(app).expose(app)
 
 @app.get("/health")
 async def health_check():

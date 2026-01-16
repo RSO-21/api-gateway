@@ -369,7 +369,7 @@ class Query:
             try:
                 # Note: Removed trailing slash if your FastAPI route doesn't strictly require it
                 response = await client.get(
-                    f"{settings.ORDER_SERVICE_URL}/orders", 
+                    f"{settings.ORDER_SERVICE_URL}/list_orders", 
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
@@ -390,7 +390,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{settings.PAYMENT_SERVICE_URL}/payments", 
+                    f"{settings.PAYMENT_SERVICE_URL}/list_payments", 
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
@@ -411,7 +411,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{settings.PARTNER_SERVICE_URL}/partners", # URL tvoje mikrostoritve
+                    f"{settings.PARTNER_SERVICE_URL}/list_partners", # URL tvoje mikrostoritve
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
@@ -438,7 +438,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 # URL vsebuje ID partnerja
-                url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+                url = f"{settings.PARTNER_SERVICE_URL}/{partner_id}"
                 
                 response = await client.get(
                     url, 
@@ -467,40 +467,37 @@ class Query:
         request = info.context["request"]
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
-        # 2. HTTP klic na Partner mikrostoritev
-        async with httpx.AsyncClient() as client:
-            try:
-                # URL vsebuje ID partnerja
-                url = f"{settings.PARTNER_SERVICE_URL}/partners/nearby"
-
-                params = {
-                    "lat": lat,
-                    "lng": lng,
-                    "radius_km": radius_km
-                }
-                
-                response = await client.get(
-                    url, 
-                    headers={"X-Tenant-ID": tenant_id},
-                    timeout=settings.REQUEST_TIMEOUT,
-                    follow_redirects=True,
-                    params=params
-                )
-                
-                # Če partnerja ni (404), vrnemo None
-                if response.status_code == 404:
-                    return None
+        http_client = info.context["http_client"]
+        
+        url = f"{settings.PARTNER_SERVICE_URL}/nearby"
+        params = {"lat": lat, "lng": lng, "radius_km": radius_km}
+        
+        try:
+            print(f"Calling Partner service: {url} with params {params}")
+            response = await http_client.get(
+                url, 
+                headers={"X-Tenant-ID": tenant_id},
+                timeout=settings.REQUEST_TIMEOUT,
+                follow_redirects=True,
+                params=params
+            )
             
-                    
-                if response.status_code != 200:
-                    raise Exception(f"Partner service returned {response.status_code}")
-                
-                # 3. Mapiranje rezultata
-                partner_json = response.json()
-                return [map_partner_data(p) for p in partner_json]
-                
-            except Exception as e:
-                raise Exception(f"Error fetching nearby partners at ({lat, lng}): {str(e)}")
+            print(f"Partner service returned: {response.status_code}")
+            if response.status_code == 404:
+                return []
+            
+            if response.status_code != 200:
+                raise Exception(f"Partner service returned {response.status_code}")
+            
+            partner_json = response.json()
+            print(f"Partner JSON: {partner_json}")
+            result = [map_partner_data(p) for p in partner_json]
+            print(f"Mapped result: {result}")
+            return result
+        
+        except Exception as e:
+            print(f"Resolver error: {str(e)}")
+            raise
     
     @strawberry.field
     async def get_offers(self, info) -> List[OfferType]:
@@ -510,7 +507,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{settings.OFFER_SERVICE_URL}/offers", 
+                    f"{settings.OFFER_SERVICE_URL}/list_offers", 
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
@@ -532,7 +529,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 # URL vsebuje ID partnerja
-                url = f"{settings.OFFER_SERVICE_URL}/offers/{offer_id}"
+                url = f"{settings.OFFER_SERVICE_URL}/{offer_id}"
                 
                 response = await client.get(
                     url, 
@@ -564,7 +561,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{settings.NOTIFICATION_SERVICE_URL}/notifications", # URL tvoje mikrostoritve
+                    f"{settings.NOTIFICATION_SERVICE_URL}/list_notifications", # URL tvoje mikrostoritve
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True,
@@ -593,7 +590,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{settings.USER_SERVICE_URL}/users", # URL tvoje mikrostoritve
+                    f"{settings.USER_SERVICE_URL}/list_users", # URL tvoje mikrostoritve
                     headers={"X-Tenant-ID": tenant_id},
                     timeout=settings.REQUEST_TIMEOUT,
                     follow_redirects=True
@@ -618,7 +615,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 # URL vsebuje ID partnerja
-                url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
+                url = f"{settings.USER_SERVICE_URL}/{user_id}"
                 
                 response = await client.get(
                     url, 
@@ -650,7 +647,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 # URL vsebuje ID partnerja
-                url = f"{settings.REVIEW_SERVICE_URL}/reviews/partners/{partner_id}/reviews"
+                url = f"{settings.REVIEW_SERVICE_URL}/partners/{partner_id}/reviews"
                 
                 response = await client.get(
                     url, 
@@ -683,7 +680,7 @@ class Query:
         async with httpx.AsyncClient() as client:
             try:
                 # URL vsebuje ID partnerja
-                url = f"{settings.REVIEW_SERVICE_URL}/reviews/partners/{partner_id}/rating"
+                url = f"{settings.REVIEW_SERVICE_URL}/partners/{partner_id}/rating"
                 
                 response = await client.get(
                     url, 
@@ -716,7 +713,7 @@ class Query:
         
         async with httpx.AsyncClient() as client:
             try:
-                url = f"{settings.USER_SERVICE_URL}/users/{user_id}/orders"
+                url = f"{settings.USER_SERVICE_URL}/{user_id}/orders"
                 
                 response = await client.get(
                     url, 
@@ -750,7 +747,7 @@ class Query:
 
         # 2. Forward them to the Auth MS /me endpoint
         auth_resp = await http_client.get(
-            f"{settings.AUTH_SERVICE_URL}/auth/me",
+            f"{settings.AUTH_SERVICE_URL}/me",
             cookies=cookies
         )
 
@@ -800,13 +797,13 @@ class Mutation:
         
         async with httpx.AsyncClient() as client:
             partner_res_tenant = await client.get(
-                f"{settings.PARTNER_SERVICE_URL}/partners/{input.partner_id}"
+                f"{settings.PARTNER_SERVICE_URL}/{input.partner_id}"
             )
 
             real_tenant = partner_res_tenant.json().get("tenant_id", "public")
 
             response = await client.post(
-                f"{settings.ORDER_SERVICE_URL}/orders",
+                f"{settings.ORDER_SERVICE_URL}",
                 json={
                     "user_id": input.user_id,
                     "items": [{"offer_id": i.offer_id, "quantity": i.quantity} for i in input.items],
@@ -836,7 +833,7 @@ class Mutation:
             }
             
             response = await client.post(
-                f"{settings.PARTNER_SERVICE_URL}/partners",
+                f"{settings.PARTNER_SERVICE_URL}",
                 json=payload,
                 headers={"X-Tenant-ID": tenant_id},
                 follow_redirects=True
@@ -855,7 +852,7 @@ class Mutation:
         update_data = {k: v for k, v in update_data.items() if v is not None}
 
         async with httpx.AsyncClient() as client:
-            url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+            url = f"{settings.PARTNER_SERVICE_URL}/{partner_id}"
             
             # 3. Make the remote call
             response = await client.put(
@@ -879,7 +876,7 @@ class Mutation:
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
         async with httpx.AsyncClient() as client:
-            url = f"{settings.PARTNER_SERVICE_URL}/partners/{partner_id}"
+            url = f"{settings.PARTNER_SERVICE_URL}/{partner_id}"
             response = await client.delete(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
             
             if response.status_code != 204:
@@ -905,7 +902,7 @@ class Mutation:
                 payload["description"] = input.description
             
             response = await client.post(
-                f"{settings.OFFER_SERVICE_URL}/offers",
+                f"{settings.OFFER_SERVICE_URL}",
                 json=payload,
                 headers={"X-Tenant-ID": tenant_id},
                 follow_redirects=True
@@ -924,7 +921,7 @@ class Mutation:
         update_data = {k: v for k, v in update_data.items() if v is not None}
 
         async with httpx.AsyncClient() as client:
-            url = f"{settings.OFFER_SERVICE_URL}/offers/{offer_id}"
+            url = f"{settings.OFFER_SERVICE_URL}/{offer_id}"
             
             # 3. Make the remote call
             response = await client.put(
@@ -948,7 +945,7 @@ class Mutation:
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
         async with httpx.AsyncClient() as client:
-            url = f"{settings.OFFER_SERVICE_URL}/offers/{offer_id}"
+            url = f"{settings.OFFER_SERVICE_URL}/{offer_id}"
             response = await client.delete(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
             
             if response.status_code != 204:
@@ -963,7 +960,7 @@ class Mutation:
         
         async with httpx.AsyncClient() as client:
             params = {"external_id": external_id}
-            url = f"{settings.PAYMENT_SERVICE_URL}/payments/{payment_id}/confirm"
+            url = f"{settings.PAYMENT_SERVICE_URL}/{payment_id}/confirm"
             response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, params=params, follow_redirects=True)
             
             if response.status_code != 200:
@@ -977,7 +974,7 @@ class Mutation:
         tenant_id = request.headers.get("X-Tenant-ID", "public")
         
         async with httpx.AsyncClient() as client:
-            url = f"{settings.NOTIFICATION_SERVICE_URL}/notifications/{notification_id}/read"
+            url = f"{settings.NOTIFICATION_SERVICE_URL}/{notification_id}/read"
             response = await client.post(url, headers={"X-Tenant-ID": tenant_id}, follow_redirects=True)
             
             if response.status_code != 200:
@@ -994,7 +991,7 @@ class Mutation:
         update_data = {k: v for k, v in update_data.items() if v is not None}
 
         async with httpx.AsyncClient() as client:
-            url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
+            url = f"{settings.USER_SERVICE_URL}/{user_id}"
             
             # 3. Make the remote call
             response = await client.patch(
@@ -1020,7 +1017,7 @@ class Mutation:
         # 1. Forward the credentials to the Auth MS
         # No Keycloak logic here!
         auth_response = await http_client.post(
-            f"{settings.AUTH_SERVICE_URL}/auth/login",
+            f"{settings.AUTH_SERVICE_URL}/login",
             json={"username": input.username, "password": input.password}
         )
 
@@ -1042,7 +1039,7 @@ class Mutation:
         # 1. Forward signup to Flask Auth Microservice
         try:
             auth_resp = await http_client.post(
-                f"{settings.AUTH_SERVICE_URL}/auth/signup",
+                f"{settings.AUTH_SERVICE_URL}/signup",
                 json={
                     "username": input.username,
                     "email": input.email,
@@ -1074,7 +1071,7 @@ class Mutation:
         http_client = info.context["http_client"]
 
         # 1. Call the Auth Microservice logout endpoint
-        auth_resp = await http_client.post(f"{settings.AUTH_SERVICE_URL}/auth/logout")
+        auth_resp = await http_client.post(f"{settings.AUTH_SERVICE_URL}/logout")
 
         auth_cookies = auth_resp.headers.get_list("set-cookie")
         for cookie_string in auth_cookies:
@@ -1098,7 +1095,7 @@ class Mutation:
                 payload["comment"] = input.comment
             
             response = await client.post(
-                f"{settings.REVIEW_SERVICE_URL}/reviews",
+                f"{settings.REVIEW_SERVICE_URL}",
                 json=payload,
                 headers={"X-Tenant-ID": tenant_id},
                 follow_redirects=True
