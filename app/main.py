@@ -28,6 +28,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:4200",  # Angular dev
+        "https://fri-food-dev.4.165.160.2.nip.io",
+        "https://fri-food-prod.4.165.160.2.nip.io",
+        "https://frifood.ass.si"
     ],
     allow_credentials=True,
     allow_methods=["*"],
