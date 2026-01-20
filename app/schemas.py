@@ -1,3 +1,4 @@
+import logging
 import strawberry
 from typing import List, Optional
 from datetime import datetime
@@ -28,6 +29,7 @@ class OrderType:
     items: List[OrderItemType]
     partner_id: Optional[str] = None
     payment_id: Optional[int] = None
+    external_id: Optional[str] = None
 
 @strawberry.input
 class OrderItemInput:
@@ -801,7 +803,7 @@ class Mutation:
             )
 
             real_tenant = partner_res_tenant.json().get("tenant_id", "public")
-
+            logging.info(f"Real tenant ! {real_tenant}")
             response = await client.post(
                 f"{settings.ORDER_SERVICE_URL}",
                 json={
@@ -815,6 +817,9 @@ class Mutation:
             )
             if response.status_code not in [200, 201]:
                 raise Exception(f"Order creation failed: {response.text}")
+            
+            print("Response", response.json())
+            print("Mapped", map_order_data(response.json()))
             
             return map_order_data(response.json())
     @strawberry.field
